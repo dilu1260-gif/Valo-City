@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Valo City - Phase 8</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #87CEEB; touch-action: none; font-family: sans-serif; }
+        
+        /* Mobile UI */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; }
+        
+        #joystick {
+            position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px;
+            background: rgba(255, 255, 255, 0.15); border-radius: 50%;
+            pointer-events: auto; border: 2px solid rgba(255,255,255,0.3);
+        }
+        
+        #knob {
+            position: absolute; width: 60px; height: 60px;
+            background: rgba(255, 255, 255, 0.6); border-radius: 50%;
+            top: 30px; left: 30px; pointer-events: none;
+        }
+
+        #action-btn {
+            position: absolute; bottom: 50px; right: 50px; width: 80px; height: 80px;
+            background: rgba(46, 204, 113, 0.7); color: white; border: 2px solid white;
+            border-radius: 50%; font-weight: bold; font-size: 16px;
+            display: flex; justify-content: center; align-items: center;
+            pointer-events: auto; user-select: none; opacity: 0.5; transition: opacity 0.2s;
+        }
+        #action-btn.active { opacity: 1.0; transform: scale(1.05); }
+        #action-btn.exit { background: rgba(231, 76, 60, 0.7); opacity: 1.0; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="joystick"><div id="knob"></div></div>
+        <div id="action-btn">ENTER</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+        // --- 1. SETUP & CORE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); 
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 150);
+
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
+        const renderer = new THREE.WebGLRenderer({ antialias: false }); // Antialias false for better mobile FPS
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. TEXTURE MAPPING SYSTEM ---
+        const textureLoader = new THREE.TextureLoader();
+        
+        // PASTE YOUR VALO CITY GITHUB RAW URLS HERE
+        const textureUrls = {
+            asphalt: '', // e.g., 'https://raw.githubusercontent.com/YourUser/Valo-City/main/asphalt.jpg'
+            grass: '',   
+            building: '' 
+        };
+
+        // Helper to load textures safely (falls back to colors if URL is empty)
+        function getMaterial(colorHex, textureUrl, tiling = 1) {
+            const mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.8 });
+            if (textureUrl) {
+                textureLoader.load(textureUrl, (tex) => {
+                    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(tiling, tiling);
+                    mat.map = tex;
+                    mat.needsUpdate = true;
+                });
+            }
+            return mat;
+        }
+
+        // --- 3. ENVIRONMENT ---
+        // Sun Light
+        const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+        sun.position.set(50, 100, 50);
+        sun.castShadow = true;
+        sun.shadow.camera.near = 0.5;
+        sun.shadow.camera.far = 200;
+        sun.shadow.camera.left = -50; sun.shadow.camera.right = 50;
+        sun.shadow.camera.top = 50; sun.shadow.camera.bottom = -50;
+        scene.add(sun);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+        // City Ground (Asphalt)
+        const groundMat = getMaterial(0x333333, textureUrls.asphalt, 20);
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Parks (Grass)
+        const parkMat = getMaterial(0x27ae60, textureUrls.grass, 5);
+        for(let i=0; i<4; i++) {
+            const park = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), parkMat);
+            park.rotation.x = -Math.PI / 2;
+            park.position.set((Math.random()-0.5)*150, 0.05, (Math.random()-0.5)*150);
+            park.receiveShadow = true;
+            scene.add(park);
+        }
+
+        // Buildings
+        const bldgMat = getMaterial(0x95a5a6, textureUrls.building, 2);
+        for (let i = 0; i < 20; i++) {
+            const w = Math.random() * 8 + 5; const d = Math.random() * 8 + 5; const h = Math.random() * 30 + 10;
+            const bldg = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), bldgMat);
+            bldg.position.set((Math.random()-0.5)*200, h/2, (Math.random()-0.5)*200);
+            bldg.castShadow = true; bldg.receiveShadow = true;
+            scene.add(bldg);
+        }
+
+        // --- 4. PLAYER & VEHICLES ---
+        const player = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1, 4, 8), new THREE.MeshStandardMaterial({ color: 0x3498db }));
+        player.position.set(0, 1, 0);
+        player.castShadow = true;
+        scene.add(player);
+
+        const vehicles = [];
+        
+        function createCar(colorHex, startX, startZ) {
+            const carGroup = new THREE.Group();
+            const mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.4 });
+            const blackMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+            
+            // Body
+            const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 4.5), mat);
+            body.position.y = 0.6;
+            // Cabin
+            const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 2.5), mat);
+            cabin.position.set(0, 1.35, -0.2);
+            carGroup.add(body, cabin);
+
+            // Wheels
+            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+            wheelGeo.rotateZ(Math.PI / 2);
+            const wheelPositions = [ [-1, 0.4, 1.5], [1, 0.4, 1.5], [-1, 0.4, -1.5], [1, 0.4, -1.5] ];
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeo, blackMat);
+                wheel.position.set(...pos);
+                carGroup.add(wheel);
+            });
+
+            carGroup.traverse(child => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
+            carGroup.position.set(startX, 0, startZ);
+            scene.add(carGroup);
+
+            return { 
+                mesh: carGroup, 
+                velocity: 0, 
+                acceleration: 0.015, 
+                friction: 0.96, // Drag when letting go of gas
+                turnSpeed: 0.04 
+            };
+        }
+
+        vehicles.push(createCar(0xe74c3c, 10, 10)); // Red
+        vehicles.push(createCar(0xf1c40f, -15, 20)); // Yellow
+        vehicles.push(createCar(0x2c3e50, 5, -20)); // Black
+
+        // --- 5. GAME STATE & MECHANICS ---
+        const state = {
+            mode: 'ON_FOOT', // 'ON_FOOT' or 'DRIVING'
+            activeVehicle: null,
+            nearbyVehicle: null
+        };
+
+        const actionBtn = document.getElementById('action-btn');
+
+        actionBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (state.mode === 'ON_FOOT' && state.nearbyVehicle) {
+                // Enter Vehicle
+                state.mode = 'DRIVING';
+                state.activeVehicle = state.nearbyVehicle;
+                player.visible = false;
+                actionBtn.innerText = 'EXIT';
+                actionBtn.className = 'exit';
+            } else if (state.mode === 'DRIVING') {
+                // Exit Vehicle
+                state.mode = 'ON_FOOT';
+                player.position.copy(state.activeVehicle.mesh.position);
+                player.position.x += 3; // Spawn slightly to the side
+                player.position.y = 1;
+                player.visible = true;
+                state.activeVehicle = null;
+                actionBtn.innerText = 'ENTER';
+                actionBtn.className = '';
+            }
+        }, { passive: false });
+
+        // --- 6. CONTROLS ---
+        let moveForce = 0, rotateForce = 0;
+        const joystick = document.getElementById('joystick');
+        const knob = document.getElementById('knob');
+
+        joystick.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const rect = joystick.getBoundingClientRect();
+            const touch = Array.from(e.touches).find(t => t.clientX < window.innerWidth / 2);
+            if (!touch) return;
+
+            let x = touch.clientX - (rect.left + 60);
+            let y = touch.clientY - (rect.top + 60);
+            const distance = Math.min(Math.hypot(x, y), 60);
+            const angle = Math.atan2(y, x);
+
+            x = Math.cos(angle) * distance;
+            y = Math.sin(angle) * distance;
+            knob.style.transform = `translate(${x}px, ${y}px)`;
+
+            rotateForce = -(x / 60);
+            moveForce = -(y / 60);
+        }, { passive: false });
+
+        const resetJoystick = () => { rotateForce = 0; moveForce = 0; knob.style.transform = `translate(0px, 0px)`; };
+        joystick.addEventListener('touchend', resetJoystick);
+        joystick.addEventListener('touchcancel', resetJoystick);
+
+        // --- 7. ANIMATION & PHYSICS LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            let targetMesh;
+
+            if (state.mode === 'ON_FOOT') {
+                // Walking Physics
+                player.rotation.y += rotateForce * 0.05;
+                player.translateZ(moveForce * 0.15);
+                targetMesh = player;
+
+                // Check distance to cars to activate ENTER button
+                state.nearbyVehicle = null;
+                let closestDist = Infinity;
+                vehicles.forEach(car => {
+                    const dist = player.position.distanceTo(car.mesh.position);
+                    if (dist < 5 && dist < closestDist) {
+                        closestDist = dist;
+                        state.nearbyVehicle = car;
+                    }
+                });
+                
+                if (state.nearbyVehicle) actionBtn.classList.add('active');
+                else actionBtn.classList.remove('active');
+
+            } else if (state.mode === 'DRIVING') {
+                // Driving Physics
+                const car = state.activeVehicle;
+                
+                // Accelerate / Reverse
+                if (moveForce > 0.1) car.velocity -= car.acceleration; // Forward (-Z)
+                if (moveForce < -0.1) car.velocity += car.acceleration; // Reverse (+Z)
+                
+                // Apply Friction/Drag
+                car.velocity *= car.friction; 
+                
+                // Steering (Only turn if moving)
+                if (Math.abs(car.velocity) > 0.01 && Math.abs(rotateForce) > 0.1) {
+                    const turnDir = car.velocity < 0 ? 1 : -1; // Invert steering if reversing
+                    car.mesh.rotation.y += rotateForce * car.turnSpeed * turnDir;
+                }
+
+                car.mesh.translateZ(car.velocity);
+                targetMesh = car.mesh;
+            }
+
+            // Smooth Third-Person Camera (Follows active mesh)
+            const relativeOffset = new THREE.Vector3(0, targetMesh === player ? 4 : 6, targetMesh === player ? 8 : 12);
+            const cameraOffset = relativeOffset.applyMatrix4(targetMesh.matrixWorld);
+            camera.position.lerp(cameraOffset, 0.1);
+            camera.lookAt(targetMesh.position);
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
